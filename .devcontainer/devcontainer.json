@@ -1,0 +1,29 @@
+{
+	"name": "lymphoma-omics",
+	"build": {
+        "dockerfile": "Dockerfile"
+    },
+
+    "runArgs": ["--gpus", "all"],
+
+	// Configure tool-specific properties.
+	"customizations": {
+        // Configure the vscode.
+        "vscode": {
+            // Install the vscode extension.
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-python.debugpy",
+                "ms-toolsai.jupyter",
+                "njpwerner.autodocstring"
+            ]
+        }
+        
+    },
+
+    // Mount the data directory in the container.
+    "mounts": [
+        "source=/home/ahmed/Data,target=/workspaces/lymphoma-omics/data,type=bind,consistency=cached",
+    ]
+}
