@@ -16,7 +16,9 @@
                 "ms-python.vscode-pylance",
                 "ms-python.debugpy",
                 "ms-toolsai.jupyter",
-                "njpwerner.autodocstring"
+                "njpwerner.autodocstring",
+                "snakemake.snakemake-lang",
+                "mechatroner.rainbow-csv"
             ]
         }
         

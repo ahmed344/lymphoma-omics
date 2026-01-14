@@ -1,0 +1,323 @@
+"""
+Snakemake workflow for somatic variant calling using GATK Mutect2.
+Reads configuration from config.yml.
+"""
+
+# Load configuration
+configfile: "config.yml"
+
+# Helper functions for path construction
+def get_path(relative_path):
+    """Construct absolute path from config root and relative path."""
+    return f"{config['root']}/{relative_path}"
+
+def get_ref_path():
+    """Get absolute path to reference FASTA."""
+    return get_path(config['reference'])
+
+def get_fastq_path(filename):
+    """Get absolute path to FASTQ file."""
+    return get_path(f"{config['fastq_dir']}/{filename}")
+
+def get_alignment_dir():
+    """Get alignment output directory."""
+    return get_path(f"{config['output']['alignment_dir']}/{config['patient']}")
+
+def get_vc_dir():
+    """Get variant calling output directory."""
+    return get_path(f"{config['output']['variant_calling_dir']}/{config['patient']}")
+
+def get_log_dir():
+    """Get log directory."""
+    return f"{get_vc_dir()}/logs"
+
+# Define sample IDs
+NORMAL_ID = config['samples']['normal']['id']
+TUMOR_ID = config['samples']['tumor']['id']
+PATIENT = config['patient']
+
+# Reference paths
+REF_FA = get_ref_path()
+REF_FAI = f"{REF_FA}.fai"
+REF_DICT = REF_FA.replace('.fa', '.dict')
+REF_BWT = f"{REF_FA}.bwt"
+
+# Alignment directories
+ALIGN_DIR = get_alignment_dir()
+VC_DIR = get_vc_dir()
+LOG_DIR = get_log_dir()
+
+# FASTQ paths
+NORMAL_R1 = get_fastq_path(config['samples']['normal']['r1'])
+NORMAL_R2 = get_fastq_path(config['samples']['normal']['r2'])
+TUMOR_R1 = get_fastq_path(config['samples']['tumor']['r1'])
+TUMOR_R2 = get_fastq_path(config['samples']['tumor']['r2'])
+
+# Rule: Prepare reference genome indices
+rule prepare_reference:
+    """
+    Index reference genome: FASTA index, sequence dictionary, and BWA index.
+    Assumes reference FASTA already exists.
+    """
+    input:
+        ref_fa = REF_FA
+    output:
+        fai = REF_FAI,
+        dict = REF_DICT,
+        bwt = REF_BWT
+    log:
+        fai_log = f"{LOG_DIR}/prepare_reference_fai.log",
+        dict_log = f"{LOG_DIR}/prepare_reference_dict.log",
+        bwt_log = f"{LOG_DIR}/prepare_reference_bwt.log"
+    threads: 1
+    shell:
+        """
+        # Index FASTA
+        samtools faidx {input.ref_fa} 2> {log.fai_log}
+        
+        # Create sequence dictionary
+        gatk CreateSequenceDictionary -R {input.ref_fa} -O {output.dict} 2> {log.dict_log}
+        
+        # Index for BWA
+        bwa index {input.ref_fa} 2> {log.bwt_log}
+        """
+
+# Rule: Run fastp on normal sample (conditional)
+if config.get('run_fastp', False):
+    rule fastp_normal:
+        """Trim and QC normal sample reads using fastp."""
+        input:
+            r1 = NORMAL_R1,
+            r2 = NORMAL_R2
+        output:
+            r1 = f"{ALIGN_DIR}/fastp/{NORMAL_ID}.R1.fastq.gz",
+            r2 = f"{ALIGN_DIR}/fastp/{NORMAL_ID}.R2.fastq.gz",
+            html = f"{ALIGN_DIR}/fastp/{NORMAL_ID}.html",
+            json = f"{ALIGN_DIR}/fastp/{NORMAL_ID}.json"
+        log:
+            f"{LOG_DIR}/fastp_{NORMAL_ID}.log"
+        threads: config['threads']
+        shell:
+            """
+            fastp \
+                -i {input.r1} -I {input.r2} \
+                -o {output.r1} -O {output.r2} \
+                -h {output.html} -j {output.json} \
+                -w {threads} \
+                2>&1 | tee {log}
+            """
+
+# Rule: Run fastp on tumor sample (conditional)
+if config.get('run_fastp', False):
+    rule fastp_tumor:
+        """Trim and QC tumor sample reads using fastp."""
+        input:
+            r1 = TUMOR_R1,
+            r2 = TUMOR_R2
+        output:
+            r1 = f"{ALIGN_DIR}/fastp/{TUMOR_ID}.R1.fastq.gz",
+            r2 = f"{ALIGN_DIR}/fastp/{TUMOR_ID}.R2.fastq.gz",
+            html = f"{ALIGN_DIR}/fastp/{TUMOR_ID}.html",
+            json = f"{ALIGN_DIR}/fastp/{TUMOR_ID}.json"
+        log:
+            f"{LOG_DIR}/fastp_{TUMOR_ID}.log"
+        threads: config['threads']
+        shell:
+            """
+            fastp \
+                -i {input.r1} -I {input.r2} \
+                -o {output.r1} -O {output.r2} \
+                -h {output.html} -j {output.json} \
+                -w {threads} \
+                2>&1 | tee {log}
+            """
+
+# Helper function to get FASTQ inputs (with or without fastp)
+def get_normal_fastq_inputs(wildcards):
+    """Get normal FASTQ inputs, using fastp outputs if enabled, otherwise raw FASTQs."""
+    if config.get('run_fastp', False):
+        return [
+            f"{ALIGN_DIR}/fastp/{NORMAL_ID}.R1.fastq.gz",
+            f"{ALIGN_DIR}/fastp/{NORMAL_ID}.R2.fastq.gz"
+        ]
+    else:
+        return [NORMAL_R1, NORMAL_R2]
+
+def get_tumor_fastq_inputs(wildcards):
+    """Get tumor FASTQ inputs, using fastp outputs if enabled, otherwise raw FASTQs."""
+    if config.get('run_fastp', False):
+        return [
+            f"{ALIGN_DIR}/fastp/{TUMOR_ID}.R1.fastq.gz",
+            f"{ALIGN_DIR}/fastp/{TUMOR_ID}.R2.fastq.gz"
+        ]
+    else:
+        return [TUMOR_R1, TUMOR_R2]
+
+# Rule: Align normal sample
+rule align_normal:
+    """Align normal sample: BWA MEM -> sort -> mark duplicates."""
+    input:
+        fastqs = get_normal_fastq_inputs,
+        ref = REF_FA,
+        ref_fai = REF_FAI,
+        ref_dict = REF_DICT,
+        ref_bwt = REF_BWT
+    output:
+        bam = f"{ALIGN_DIR}/{NORMAL_ID}.dedup.bam",
+        bai = f"{ALIGN_DIR}/{NORMAL_ID}.dedup.bam.bai",
+        metrics = f"{ALIGN_DIR}/{NORMAL_ID}.markdup.metrics.txt"
+    log:
+        bwa = f"{LOG_DIR}/bwa_{NORMAL_ID}.log",
+        sort = f"{LOG_DIR}/samtools_sort_{NORMAL_ID}.log",
+        markdup = f"{LOG_DIR}/markduplicates_{NORMAL_ID}.log"
+    threads: config['threads']
+    shell:
+        """
+        # BWA alignment and sort
+        bwa mem -t {threads} \
+            -R "@RG\\tID:{NORMAL_ID}\\tSM:{NORMAL_ID}\\tPL:ILLUMINA\\tLB:{NORMAL_ID}\\tPU:{NORMAL_ID}" \
+            {input.ref} {input.fastqs[0]} {input.fastqs[1]} \
+            2> {log.bwa} \
+        | samtools sort -@ {threads} -o {ALIGN_DIR}/{NORMAL_ID}.sorted.bam - \
+            2> {log.sort}
+        
+        # Mark duplicates
+        gatk MarkDuplicates \
+            -I {ALIGN_DIR}/{NORMAL_ID}.sorted.bam \
+            -O {output.bam} \
+            -M {output.metrics} \
+            --CREATE_INDEX true \
+            --VALIDATION_STRINGENCY SILENT \
+            2>&1 | tee {log.markdup}
+        """
+
+# Rule: Align tumor sample
+rule align_tumor:
+    """Align tumor sample: BWA MEM -> sort -> mark duplicates."""
+    input:
+        fastqs = get_tumor_fastq_inputs,
+        ref = REF_FA,
+        ref_fai = REF_FAI,
+        ref_dict = REF_DICT,
+        ref_bwt = REF_BWT
+    output:
+        bam = f"{ALIGN_DIR}/{TUMOR_ID}.dedup.bam",
+        bai = f"{ALIGN_DIR}/{TUMOR_ID}.dedup.bam.bai",
+        metrics = f"{ALIGN_DIR}/{TUMOR_ID}.markdup.metrics.txt"
+    log:
+        bwa = f"{LOG_DIR}/bwa_{TUMOR_ID}.log",
+        sort = f"{LOG_DIR}/samtools_sort_{TUMOR_ID}.log",
+        markdup = f"{LOG_DIR}/markduplicates_{TUMOR_ID}.log"
+    threads: config['threads']
+    shell:
+        """
+        # BWA alignment and sort
+        bwa mem -t {threads} \
+            -R "@RG\\tID:{TUMOR_ID}\\tSM:{TUMOR_ID}\\tPL:ILLUMINA\\tLB:{TUMOR_ID}\\tPU:{TUMOR_ID}" \
+            {input.ref} {input.fastqs[0]} {input.fastqs[1]} \
+            2> {log.bwa} \
+        | samtools sort -@ {threads} -o {ALIGN_DIR}/{TUMOR_ID}.sorted.bam - \
+            2> {log.sort}
+        
+        # Mark duplicates
+        gatk MarkDuplicates \
+            -I {ALIGN_DIR}/{TUMOR_ID}.sorted.bam \
+            -O {output.bam} \
+            -M {output.metrics} \
+            --CREATE_INDEX true \
+            --VALIDATION_STRINGENCY SILENT \
+            2>&1 | tee {log.markdup}
+        """
+
+# Rule: Run Mutect2
+rule mutect2:
+    """Run GATK Mutect2 for somatic variant calling."""
+    input:
+        ref = REF_FA,
+        ref_fai = REF_FAI,
+        ref_dict = REF_DICT,
+        tumor_bam = f"{ALIGN_DIR}/{TUMOR_ID}.dedup.bam",
+        tumor_bai = f"{ALIGN_DIR}/{TUMOR_ID}.dedup.bam.bai",
+        normal_bam = f"{ALIGN_DIR}/{NORMAL_ID}.dedup.bam",
+        normal_bai = f"{ALIGN_DIR}/{NORMAL_ID}.dedup.bam.bai"
+    output:
+        vcf = f"{VC_DIR}/unfiltered.vcf.gz",
+        f1r2 = f"{VC_DIR}/f1r2.tar.gz"
+    log:
+        f"{LOG_DIR}/mutect2.log"
+    threads: config['threads']
+    shell:
+        """
+        gatk Mutect2 \
+            -R {input.ref} \
+            -I {input.tumor_bam} -tumor {TUMOR_ID} \
+            -I {input.normal_bam} -normal {NORMAL_ID} \
+            --f1r2-tar-gz {output.f1r2} \
+            --native-pair-hmm-threads {threads} \
+            -O {output.vcf} \
+            2>&1 | tee {log}
+        """
+
+# Rule: Learn read orientation model
+rule learn_orientation:
+    """Learn read orientation model for FFPE artifact correction."""
+    input:
+        f1r2 = f"{VC_DIR}/f1r2.tar.gz"
+    output:
+        priors = f"{VC_DIR}/read-orientation-model.tar.gz"
+    log:
+        f"{LOG_DIR}/learn_read_orientation_model.log"
+    threads: 1
+    shell:
+        """
+        gatk LearnReadOrientationModel \
+            -I {input.f1r2} \
+            -O {output.priors} \
+            2>&1 | tee {log}
+        """
+
+# Rule: Filter Mutect2 calls
+rule filter_variants:
+    """Filter Mutect2 variant calls."""
+    input:
+        ref = REF_FA,
+        ref_fai = REF_FAI,
+        ref_dict = REF_DICT,
+        unfiltered_vcf = f"{VC_DIR}/unfiltered.vcf.gz",
+        ob_priors = f"{VC_DIR}/read-orientation-model.tar.gz"
+    output:
+        vcf = f"{VC_DIR}/somatic_variants.vcf.gz"
+    log:
+        f"{LOG_DIR}/filter_mutect_calls.log"
+    threads: 1
+    shell:
+        """
+        gatk FilterMutectCalls \
+            -R {input.ref} \
+            -V {input.unfiltered_vcf} \
+            --ob-priors {input.ob_priors} \
+            -O {output.vcf} \
+            2>&1 | tee {log}
+        """
+
+# Rule: Index final VCF
+rule index_vcf:
+    """Index final filtered VCF using tabix."""
+    input:
+        vcf = f"{VC_DIR}/somatic_variants.vcf.gz"
+    output:
+        tbi = f"{VC_DIR}/somatic_variants.vcf.gz.tbi"
+    log:
+        f"{LOG_DIR}/index_vcf.log"
+    threads: 1
+    shell:
+        """
+        tabix -p vcf {input.vcf} 2>&1 | tee {log}
+        """
+
+# Default target
+rule all:
+    """Default target: run the complete workflow."""
+    input:
+        final_vcf = f"{VC_DIR}/somatic_variants.vcf.gz",
+        final_tbi = f"{VC_DIR}/somatic_variants.vcf.gz.tbi"

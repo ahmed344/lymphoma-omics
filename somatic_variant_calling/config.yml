@@ -1,0 +1,18 @@
+patient: "VAU_P787671"
+root: "/workspaces/lymphoma-omics"
+fastq_dir: "data/Diana/fastq"
+reference: "data/Diana/reference/GRCh38.d1.vd1.fa"  # Direct path to reference FASTA (must already exist)
+samples:
+  normal:
+    id: "VAU_P787671_PBL"
+    r1: "VAU_P787671_PBL_S9_R1_001.fastq.gz"
+    r2: "VAU_P787671_PBL_S9_R2_001.fastq.gz"
+  tumor:
+    id: "VAU_P787671_FFPE"
+    r1: "VAU_P787671_FFPE_S10_R1_001.fastq.gz"
+    r2: "VAU_P787671_FFPE_S10_R2_001.fastq.gz"
+output:
+  alignment_dir: "data/Diana/alignment"
+  variant_calling_dir: "data/Diana/variant_calling"
+threads: 16
+run_fastp: false

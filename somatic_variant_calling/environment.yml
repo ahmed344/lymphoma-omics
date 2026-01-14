@@ -1,0 +1,13 @@
+name: somatic_variant_calling
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - snakemake>=7.0
+  - gatk4=4.6.*
+  - bwa=0.7.*
+  - samtools=1.21.*
+  - bcftools=1.21.*
+  - htslib=1.21.*
+  - fastp=0.24.*
