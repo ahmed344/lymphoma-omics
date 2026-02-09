@@ -1,3 +1,5 @@
+pydeseq2
+gseapy
 pandas
 seaborn
 scikit-learn
