@@ -14,14 +14,22 @@
 # ---
 
 # %%
-import anndata as ad
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 import pandas as pd
+import anndata as ad
+from pathlib import Path
 from pydeseq2.dds import DeseqDataSet
 from pydeseq2.ds import DeseqStats
 
 # %%
+# Define the paths
+ADATA_PATH = Path('/workspaces/lymphoma-omics/data/Diana/rna_seq/adata.h5ad')
+RESULTS_DIR = Path('/workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression')
+# %%
 # load the adata object
-adata = ad.read_h5ad('/workspaces/lymphoma-omics/data/Diana/rna_seq/adata.h5ad')
+adata = ad.read_h5ad(ADATA_PATH)
 adata
 
 # %%
@@ -65,14 +73,15 @@ significant_genes = final_res[(final_res['padj'] < 0.05) & (abs(final_res['log2F
 significant_genes
 
 # %%
-import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
+# save the results
+final_res.to_csv(RESULTS_DIR / 'differential_expression_results.csv')
+significant_genes.to_csv(RESULTS_DIR / 'differential_expression_significant_genes.csv')
 
-# 1. Prepare the data
+# %%
+# Prepare the data
 volcano_data = results_df.dropna(subset=['log2FoldChange', 'padj']).copy()
 
-# 2. Add a column for color categories
+# Add a column for color categories
 def map_color(row):
     if row['padj'] < 0.05 and row['log2FoldChange'] > 1:
         return 'Upregulated (AITL)'
@@ -83,8 +92,8 @@ def map_color(row):
 
 volcano_data['significance'] = volcano_data.apply(map_color, axis=1)
 
-# 3. Create the Plot
-plt.figure(figsize=(15, 10))
+# Create the Plot
+plt.figure(figsize=(10, 8))
 
 sns.scatterplot(
     data=volcano_data,
@@ -96,16 +105,16 @@ sns.scatterplot(
         'Downregulated (Control)': '#1f77b4',
         'Not Significant': 'lightgrey'
     },
-    s=30,
+    s=10,
     edgecolor=None,
     alpha=0.7
 )
 
-# 4. Add lines and labels
-plt.axhline(-np.log10(0.05), ls='--', color='black', alpha=0.5, label='p-adj = 0.05')
-plt.axvline(1, ls='--', color='black', alpha=0.5)
-plt.axvline(-1, ls='--', color='black', alpha=0.5)
-plt.axvline(0, ls='-', color='grey', alpha=0.8, linewidth=1)  # Center the x-axis at zero
+# Add lines and labels
+plt.axhline(-np.log10(0.05), ls='--', color='black', alpha=0.3, label='p-adj = 0.05')
+plt.axvline(1, ls='--', color='black', alpha=0.3)
+plt.axvline(-1, ls='--', color='black', alpha=0.3)
+plt.axvline(0, ls='-', color='grey', alpha=0.9, linewidth=1)  # Center the x-axis at zero
 
 # Set the xlim so that zero is visually centered
 # We'll set the axis limits to be symmetric
@@ -127,12 +136,8 @@ for index, row in significant_genes.iterrows():
         row['log2FoldChange'] + 0.05,
         -np.log10(row['padj']) - 0.02,
         row['gene_name'],
-        fontsize=6
+        fontsize=4
     )
-plt.savefig('/workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression_volcano_plot.png')
+plt.tight_layout()
+plt.savefig(RESULTS_DIR / 'differential_expression_volcano_plot.png', dpi=500)
 plt.show()
-
-# %%
-# save the results
-final_res.to_csv('/workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression_results.csv')
-significant_genes.to_csv('/workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression_significant_genes.csv')
