@@ -30,17 +30,20 @@ import seaborn as sns
 # ## Config
 
 # %%
+# condition
+CONDITION = 'IDH2'
+
 GSEA_RESULTS_CSV = Path(
-    "/workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gsea_hallmark_prerank/gsea_hallmark_prerank_results.csv"
+    f"/workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gsea_hallmark_prerank_{CONDITION}/gsea_hallmark_prerank_results_{CONDITION}.csv"
 )
 
 OUT_DIR = Path(
-    "/workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gsea_hallmark_prerank/leading_edge_analysis"
+    f"/workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gsea_hallmark_prerank_{CONDITION}/leading_edge_analysis"
 )
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 DE_RESULTS_CSV = Path(
-    "/workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression/differential_expression_results.csv"
+    f"/workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression/differential_expression_results_{CONDITION}.csv"
 )
 
 TERM_COL = "Term"
@@ -166,7 +169,7 @@ cluster_grid = sns.clustermap(
     center=0,
     vmin=-max_val,
     vmax=max_val,
-    figsize=(25, 8),
+    figsize=(25, 10),
     dendrogram_ratio=(0.04, 0.1),
     linewidths=0.2,
     linecolor="lightgrey",

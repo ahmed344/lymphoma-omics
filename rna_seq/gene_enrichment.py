@@ -31,18 +31,20 @@ from gseapy.plot import barplot, dotplot  # Plot helpers for GSEA results.
 # ## Config  # Configuration section.
 
 # %%
+# condition
+CONDITION = 'IDH2'  # condition
 RESULTS_CSV = Path(  # Input DE results CSV path.
-    "/workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression/differential_expression_results.csv"  # CSV path.
+    f"/workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression/differential_expression_results_{CONDITION}.csv"  # CSV path.
 )  # Input DE results CSV path.
 SIGNIFICANT_CSV = Path(  # Input significant genes CSV path.
-    "/workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression/differential_expression_significant_genes.csv"  # CSV path.
+    f"/workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression/differential_expression_significant_genes_{CONDITION}.csv"  # CSV path.
 )  # Input significant genes CSV path.
 GMT_PATH = Path(  # Hallmark GMT path.
     "/workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gene_sets/h.all.v2026.1.Hs.symbols.gmt"  # GMT path.
 )  # Hallmark GMT path.
 
 OUT_DIR = Path(  # Output directory for GSEA results and plots.
-    "/workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gsea_hallmark_prerank"  # Output path.
+    f"/workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gsea_hallmark_prerank_{CONDITION}"  # Output path.
 )  # Output directory for GSEA results and plots.
 OUT_DIR.mkdir(parents=True, exist_ok=True)  # Ensure output directory exists.
 

@@ -27,6 +27,9 @@ from pydeseq2.ds import DeseqStats
 # Define the paths
 ADATA_PATH = Path('/workspaces/lymphoma-omics/data/Diana/rna_seq/adata.h5ad')
 RESULTS_DIR = Path('/workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression')
+
+# condition
+CONDITION = 'IDH2'
 # %%
 # load the adata object
 adata = ad.read_h5ad(ADATA_PATH)
@@ -37,7 +40,7 @@ adata
 # design_factors is the column in adata.obs you want to compare
 dds = DeseqDataSet(
     adata=adata,
-    design="~Condition", 
+    design=f"~{CONDITION}", 
     refit_cooks=True,
     n_cpus=8 # Adjust based on your machine
 )
@@ -54,7 +57,7 @@ dds.deseq2()
 # Here we compare AITL (Test) vs Control (Ref)
 stat_res = DeseqStats(
     dds, 
-    contrast=["Condition", "AITL", "Control"],
+    contrast=[CONDITION, f"{CONDITION}mut", f"{CONDITION}wt"],
     n_cpus=8
 )
 
@@ -74,8 +77,8 @@ significant_genes
 
 # %%
 # save the results
-final_res.to_csv(RESULTS_DIR / 'differential_expression_results.csv')
-significant_genes.to_csv(RESULTS_DIR / 'differential_expression_significant_genes.csv')
+final_res.to_csv(RESULTS_DIR / f'differential_expression_results_{CONDITION}.csv')
+significant_genes.to_csv(RESULTS_DIR / f'differential_expression_significant_genes_{CONDITION}.csv')
 
 # %%
 # Prepare the data
@@ -84,9 +87,9 @@ volcano_data = results_df.dropna(subset=['log2FoldChange', 'padj']).copy()
 # Add a column for color categories
 def map_color(row):
     if row['padj'] < 0.05 and row['log2FoldChange'] > 1:
-        return 'Upregulated (AITL)'
+        return 'Upregulated (Mutated)'
     elif row['padj'] < 0.05 and row['log2FoldChange'] < -1:
-        return 'Downregulated (Control)'
+        return 'Downregulated (WT)'
     else:
         return 'Not Significant'
 
@@ -101,8 +104,8 @@ sns.scatterplot(
     y=-np.log10(volcano_data['padj']),
     hue='significance',
     palette={
-        'Upregulated (AITL)': '#d62728',
-        'Downregulated (Control)': '#1f77b4',
+        'Upregulated (Mutated)': '#d62728',
+        'Downregulated (WT)': '#1f77b4',
         'Not Significant': 'lightgrey'
     },
     s=10,
@@ -121,17 +124,19 @@ plt.axvline(0, ls='-', color='grey', alpha=0.9, linewidth=1)  # Center the x-axi
 xmax = np.ceil(np.max(np.abs(volcano_data['log2FoldChange'])))
 plt.xlim(-xmax, xmax)
 
-plt.title('Volcano Plot: AITL vs Control', fontsize=20)
+plt.title(f'Volcano Plot: {CONDITION} mutated vs wild type', fontsize=20)
 plt.xlabel('log2 Fold Change', fontsize=16)
 plt.ylabel('-log10(Adjusted P-value)', fontsize=16)
 plt.xticks(fontsize=14)
 plt.yticks(fontsize=14)
 plt.grid(alpha=0.3)
-plt.legend(loc='upper right', fontsize=14)
+plt.legend(fontsize=14)
 
 # Optional: Label top genes
-top_genes = significant_genes
-for index, row in significant_genes.iterrows():
+top_upregulated_genes = significant_genes[significant_genes['log2FoldChange'] > 1].nsmallest(20, 'padj')
+top_downregulated_genes = significant_genes[significant_genes['log2FoldChange'] < -1].nsmallest(20, 'padj')
+top_genes = pd.concat([top_upregulated_genes, top_downregulated_genes])
+for index, row in top_genes.iterrows():
     plt.text(
         row['log2FoldChange'] + 0.05,
         -np.log10(row['padj']) - 0.02,
@@ -139,5 +144,5 @@ for index, row in significant_genes.iterrows():
         fontsize=4
     )
 plt.tight_layout()
-plt.savefig(RESULTS_DIR / 'differential_expression_volcano_plot.png', dpi=500)
+plt.savefig(RESULTS_DIR / f'differential_expression_volcano_plot_{CONDITION}.png', dpi=500)
 plt.show()
