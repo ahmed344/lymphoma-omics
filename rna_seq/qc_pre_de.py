@@ -38,10 +38,10 @@ def parse_args() -> argparse.Namespace:
         help="Directory to store QC outputs.",
     )
     parser.add_argument(
-        "--condition-col",
-        type=str,
-        default="Condition",
-        help="Column in adata.obs for biological condition.",
+        "--qc-metadata-cols",
+        nargs="+",
+        default=["Source", "Mutations", "TET2", "IDH2", "IDHR172K"],
+        help="Metadata columns used for QC visualizations (missing columns are skipped).",
     )
     parser.add_argument(
         "--patient-col",
@@ -102,28 +102,29 @@ def parse_args() -> argparse.Namespace:
 
 def validate_obs_columns(
     obs: pd.DataFrame,
-    condition_col: str,
+    qc_metadata_cols: list[str],
     patient_col: Optional[str],
     batch_col: Optional[str],
     lane_col: Optional[str],
-) -> None:
+) -> list[str]:
     """Validate required and optional sample metadata columns.
 
     Args:
         obs (pd.DataFrame): Sample metadata table from ``adata.obs``.
-        condition_col (str): Required condition column name.
+        qc_metadata_cols (list[str]): Metadata columns requested for QC visualizations.
         patient_col (Optional[str]): Optional patient ID column name.
         batch_col (Optional[str]): Optional batch column name.
         lane_col (Optional[str]): Optional lane column name.
 
     Returns:
-        None: Raises ``ValueError`` when required columns are missing.
+        list[str]: Requested QC metadata columns that exist in ``obs``.
     """
-    missing_required = [col for col in [condition_col] if col not in obs.columns]
-    if missing_required:
-        raise ValueError(
-            f"Missing required metadata column(s): {missing_required}. "
-            "Please provide a valid --condition-col."
+    available_qc_cols = [col for col in qc_metadata_cols if col in obs.columns]
+    missing_qc_cols = [col for col in qc_metadata_cols if col not in obs.columns]
+    if missing_qc_cols:
+        print(
+            "Warning: The following QC metadata column(s) are missing and will be skipped: "
+            f"{missing_qc_cols}"
         )
 
     for optional_col, cli_name in [
@@ -135,6 +136,7 @@ def validate_obs_columns(
             raise ValueError(
                 f"Metadata column '{optional_col}' from {cli_name} was not found in adata.obs."
             )
+    return available_qc_cols
 
 
 def to_counts_dataframe(adata_obj: ad.AnnData) -> pd.DataFrame:
@@ -239,35 +241,46 @@ def filter_low_expression_genes(
 def normalize_and_log_transform(
     counts_df: pd.DataFrame,
     obs_df: pd.DataFrame,
-    condition_col: str,
+    design_col: Optional[str],
     n_cpus: int,
 ) -> pd.DataFrame:
-    """Run DESeq2 size-factor normalization and log2 transform for QC distances.
+    """Run size-factor normalization and log2 transform for QC distances.
 
     Args:
         counts_df (pd.DataFrame): Count matrix with samples as rows and genes as columns.
         obs_df (pd.DataFrame): Sample metadata table aligned to ``counts_df`` rows.
-        condition_col (str): Condition column used in DESeq2 design formula.
+        design_col (Optional[str]): Metadata column used in DESeq2 design formula when available.
         n_cpus (int): Number of CPU workers for PyDESeq2.
 
     Returns:
         pd.DataFrame: Log2-transformed normalized counts for QC analyses.
     """
-    design = f"~{condition_col}"
-    qc_adata = ad.AnnData(
-        X=counts_df.to_numpy(dtype=np.int64),
-        obs=obs_df.copy(),
-        var=pd.DataFrame(index=counts_df.columns),
-    )
+    if design_col is not None:
+        design = f"~{design_col}"
+        qc_adata = ad.AnnData(
+            X=counts_df.to_numpy(dtype=np.int64),
+            obs=obs_df.copy(),
+            var=pd.DataFrame(index=counts_df.columns),
+        )
 
-    dds = DeseqDataSet(
-        adata=qc_adata,
-        design=design,
-        refit_cooks=True,
-        n_cpus=n_cpus,
-    )
-    dds.deseq2()
-    normed_counts = np.asarray(dds.layers["normed_counts"])
+        dds = DeseqDataSet(
+            adata=qc_adata,
+            design=design,
+            refit_cooks=True,
+            n_cpus=n_cpus,
+        )
+        dds.deseq2()
+        normed_counts = np.asarray(dds.layers["normed_counts"])
+    else:
+        print(
+            "Warning: No metadata column with >=2 groups available for DESeq2 design. "
+            "Falling back to library-size normalization."
+        )
+        library_sizes = counts_df.sum(axis=1).replace(0, np.nan)
+        median_library_size = library_sizes.median()
+        size_factors = (library_sizes / median_library_size).replace(0, np.nan).fillna(1.0)
+        normed_counts = counts_df.div(size_factors, axis=0).to_numpy(dtype=float)
+
     transformed = np.log2(normed_counts + 1.0)
     transformed_df = pd.DataFrame(
         transformed, index=counts_df.index, columns=counts_df.columns
@@ -353,7 +366,7 @@ def create_category_color_series(series: pd.Series) -> pd.Series:
 
 def build_clustermap_colors(
     obs_df: pd.DataFrame,
-    condition_col: str,
+    qc_metadata_cols: list[str],
     patient_col: Optional[str],
     batch_col: Optional[str],
     lane_col: Optional[str],
@@ -362,7 +375,7 @@ def build_clustermap_colors(
 
     Args:
         obs_df (pd.DataFrame): Sample metadata table indexed by sample ID.
-        condition_col (str): Condition metadata column name.
+        qc_metadata_cols (list[str]): Metadata columns used for QC annotation colors.
         patient_col (Optional[str]): Patient metadata column name.
         batch_col (Optional[str]): Batch metadata column name.
         lane_col (Optional[str]): Lane metadata column name.
@@ -371,7 +384,8 @@ def build_clustermap_colors(
         Optional[pd.DataFrame]: Per-sample color annotations or ``None`` when unavailable.
     """
     color_cols: dict[str, pd.Series] = {}
-    for col in [condition_col, patient_col, batch_col, lane_col]:
+    ordered_cols = list(dict.fromkeys(qc_metadata_cols + [patient_col, batch_col, lane_col]))
+    for col in ordered_cols:
         if col is not None and col in obs_df.columns:
             color_cols[col] = create_category_color_series(obs_df[col])
     if not color_cols:
@@ -409,17 +423,15 @@ def save_library_size_plot(
 
 def save_pca_plot(
     pca_with_meta: pd.DataFrame,
-    condition_col: str,
-    patient_col: Optional[str],
+    metadata_col: str,
     explained_variance: np.ndarray,
     out_path: Path,
 ) -> None:
-    """Save PCA scatter plot colored by condition and optionally styled by patient.
+    """Save PCA scatter plot colored by a selected metadata column.
 
     Args:
         pca_with_meta (pd.DataFrame): DataFrame containing PC columns and metadata columns.
-        condition_col (str): Condition column used for point color.
-        patient_col (Optional[str]): Optional patient column (kept for API compatibility).
+        metadata_col (str): Metadata column used for point color.
         explained_variance (np.ndarray): PCA explained variance ratio array.
         out_path (Path): Output path for PNG plot.
 
@@ -431,15 +443,44 @@ def save_pca_plot(
         data=pca_with_meta,
         x="PC1",
         y="PC2",
-        hue=condition_col,
+        hue=metadata_col,
         s=100,
     )
     plt.xlabel(f"PC1 ({explained_variance[0]:.1%})")
     plt.ylabel(f"PC2 ({explained_variance[1]:.1%})")
-    plt.title("PCA quality control")
+    plt.title(f"PCA quality control ({metadata_col})")
     plt.tight_layout()
     plt.savefig(out_path, dpi=300)
     plt.close()
+
+
+def select_design_column(obs_df: pd.DataFrame, candidate_cols: list[str]) -> Optional[str]:
+    """Select the first metadata column suitable for DESeq2 design.
+
+    Args:
+        obs_df (pd.DataFrame): Sample metadata table aligned to the count matrix.
+        candidate_cols (list[str]): Ordered candidate columns to evaluate.
+
+    Returns:
+        Optional[str]: First column with at least two non-null groups, otherwise ``None``.
+    """
+    for col in candidate_cols:
+        if col in obs_df.columns and obs_df[col].nunique(dropna=True) >= 2:
+            return col
+    return None
+
+
+def sanitize_filename_fragment(value: str) -> str:
+    """Convert an arbitrary string to a filesystem-safe filename fragment.
+
+    Args:
+        value (str): Raw string to sanitize.
+
+    Returns:
+        str: Lowercase filename-safe string with non-alphanumeric characters replaced.
+    """
+    sanitized = "".join(ch.lower() if ch.isalnum() else "_" for ch in value).strip("_")
+    return sanitized or "metadata"
 
 
 def save_correlation_clustermap(
@@ -526,9 +567,9 @@ def main() -> None:
 
     adata = ad.read_h5ad(args.adata_path)
     obs_df = adata.obs.copy()
-    validate_obs_columns(
+    available_qc_cols = validate_obs_columns(
         obs=obs_df,
-        condition_col=args.condition_col,
+        qc_metadata_cols=args.qc_metadata_cols,
         patient_col=args.patient_col,
         batch_col=args.batch_col,
         lane_col=args.lane_col,
@@ -551,10 +592,16 @@ def main() -> None:
     )
     gene_metrics["pass_expression_filter"] = keep_gene_mask.values
 
+    obs_for_counts = obs_df.loc[filtered_counts_df.index].copy()
+    design_col = select_design_column(
+        obs_df=obs_for_counts,
+        candidate_cols=available_qc_cols + [col for col in [args.patient_col, args.batch_col, args.lane_col] if col is not None],
+    )
+
     transformed_df = normalize_and_log_transform(
         counts_df=filtered_counts_df,
-        obs_df=obs_df.loc[filtered_counts_df.index].copy(),
-        condition_col=args.condition_col,
+        obs_df=obs_for_counts,
+        design_col=design_col,
         n_cpus=args.n_cpus,
     )
 
@@ -574,7 +621,7 @@ def main() -> None:
     pca_with_meta = pca_df.join(obs_df, how="left")
     clustermap_colors = build_clustermap_colors(
         obs_df=obs_df,
-        condition_col=args.condition_col,
+        qc_metadata_cols=available_qc_cols,
         patient_col=args.patient_col,
         batch_col=args.batch_col,
         lane_col=args.lane_col,
@@ -605,13 +652,19 @@ def main() -> None:
             "explained_variance_ratio": explained_variance,
         }
     ).to_csv(args.out_dir / "pca_explained_variance.csv", index=False)
-    save_pca_plot(
-        pca_with_meta=pca_with_meta,
-        condition_col=args.condition_col,
-        patient_col=args.patient_col,
-        explained_variance=explained_variance,
-        out_path=args.out_dir / "pca_condition_patient.png",
-    )
+    if available_qc_cols:
+        for metadata_col in available_qc_cols:
+            save_pca_plot(
+                pca_with_meta=pca_with_meta,
+                metadata_col=metadata_col,
+                explained_variance=explained_variance,
+                out_path=args.out_dir / f"pca_{sanitize_filename_fragment(metadata_col)}.png",
+            )
+    else:
+        print(
+            "Warning: None of the requested QC metadata columns were found. "
+            "Skipping metadata-colored PCA plots."
+        )
 
     corr_df.to_csv(args.out_dir / "sample_correlation_matrix.csv")
     save_correlation_clustermap(
