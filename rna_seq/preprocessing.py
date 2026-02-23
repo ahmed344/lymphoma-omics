@@ -73,21 +73,30 @@ for path in file_paths:
     
     # Determine Condition based on the name
     if "AITL" in sample_base:
-        condition = "AITL" # Positive/Disease
+        source = "AITL" # Positive/Disease
     elif "ORA" in sample_base:
-        condition = "Control" # Or whatever ORA stands for
+        source = "ORA" # Or whatever ORA stands for
     else:
-        condition = "Unknown"
+        source = "Unknown"
 
     data.append({
         'Sample_ID': matrix_id,      # This will be your linker to the count matrix
-        'Condition': condition,      # Crucial for DESeq2 design
+        'Source': source,      # Crucial for DESeq2 design
         'Patient_ID': sample_base,   # Useful for batch effect checking
         'S_Index': s_index,          # 
     })
 
 # Create DataFrame
 df_metadata = pd.DataFrame(data)
+
+# Load the metadata xlsx file
+metadata = pd.read_excel('/workspaces/lymphoma-omics/data/Diana/FeatureCounts/Infos patients RNAseq AITL DLM 2.xlsx')
+
+# Merge the metadata with the sample_metadata
+df_metadata = df_metadata.merge(metadata, left_on='Patient_ID', right_on='ID EQ9', how='left')
+
+# Drop the columns that are not needed
+df_metadata = df_metadata.drop(columns=['ID EQ9'])
 
 # DEDUPLICATE: Since L001 and L002 produce the same Sample_ID, keep only one row per sample
 sample_metadata = df_metadata.drop_duplicates(subset='Sample_ID')

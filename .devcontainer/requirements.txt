@@ -1,6 +1,7 @@
 pydeseq2
 gseapy
 pandas
+openpyxl
 seaborn
 scikit-learn
 jupyter
