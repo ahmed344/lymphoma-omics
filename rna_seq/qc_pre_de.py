@@ -12,90 +12,26 @@ import seaborn as sns
 from pydeseq2.dds import DeseqDataSet
 from sklearn.decomposition import PCA
 
+from config_loader import get_config_section, load_config
+
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments for RNA-seq QC.
+    """Parse command-line arguments for YAML-configured RNA-seq QC.
 
     Args:
         None (type: None): Arguments are parsed from the command line.
 
     Returns:
-        argparse.Namespace: Parsed arguments used to configure the QC run.
+        argparse.Namespace: Parsed arguments containing only the config path.
     """
     parser = argparse.ArgumentParser(
-        description="Pre-DE RNA-seq quality-control workflow on AnnData counts."
+        description="Pre-DE RNA-seq quality-control workflow configured via YAML."
     )
     parser.add_argument(
-        "--adata-path",
+        "--config-path",
         type=Path,
-        default=Path("/workspaces/lymphoma-omics/data/Diana/rna_seq/adata.h5ad"),
-        help="Path to input AnnData (.h5ad) with raw counts.",
-    )
-    parser.add_argument(
-        "--out-dir",
-        type=Path,
-        default=Path("/workspaces/lymphoma-omics/data/Diana/rna_seq/qc_pre_de"),
-        help="Directory to store QC outputs.",
-    )
-    parser.add_argument(
-        "--qc-metadata-cols",
-        nargs="+",
-        default=["Source", "Mutations", "TET2", "IDH2", "IDHR172K"],
-        help="Metadata columns used for QC visualizations (missing columns are skipped).",
-    )
-    parser.add_argument(
-        "--patient-col",
-        type=str,
-        default="Patient_ID",
-        help="Column in adata.obs for patient identifier.",
-    )
-    parser.add_argument(
-        "--batch-col",
-        type=str,
-        default=None,
-        help="Optional column in adata.obs for sequencing batch.",
-    )
-    parser.add_argument(
-        "--lane-col",
-        type=str,
-        default=None,
-        help="Optional column in adata.obs for sequencing lane.",
-    )
-    parser.add_argument(
-        "--min-samples-expressed",
-        type=int,
-        default=2,
-        help="Minimum number of samples in which a gene must be non-zero.",
-    )
-    parser.add_argument(
-        "--min-library-size",
-        type=float,
-        default=100000.0,
-        help="Absolute minimum sample library size threshold.",
-    )
-    parser.add_argument(
-        "--mad-multiplier",
-        type=float,
-        default=3.0,
-        help="MAD multiplier for robust low-library threshold.",
-    )
-    parser.add_argument(
-        "--n-pcs",
-        type=int,
-        default=2,
-        help="Number of principal components to compute (>=2 recommended).",
-    )
-    parser.add_argument(
-        "--n-cpus",
-        type=int,
-        default=8,
-        help="Number of CPUs to use in PyDESeq2.",
-    )
-    parser.add_argument(
-        "--random-state",
-        type=int,
-        default=42,
-        help="Random seed for reproducible PCA.",
+        default=Path(__file__).with_name("config.yml"),
+        help="Path to YAML config file containing the 'qc_pre_de' section.",
     )
     return parser.parse_args()
 
@@ -557,22 +493,42 @@ def main() -> None:
     """Run the complete pre-DE RNA-seq QC workflow and write outputs.
 
     Args:
-        None (type: None): Configuration is provided through command-line arguments.
+        None (type: None): Configuration is provided through YAML.
 
     Returns:
         None: Produces QC tables and figures in the output directory.
     """
     args = parse_args()
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+    config = load_config(args.config_path)
+    qc_cfg = get_config_section(
+        config=config,
+        section="qc_pre_de",
+        required_keys=[
+            "adata_path",
+            "out_dir",
+            "qc_metadata_cols",
+            "patient_col",
+            "batch_col",
+            "lane_col",
+            "min_samples_expressed",
+            "min_library_size",
+            "mad_multiplier",
+            "n_pcs",
+            "n_cpus",
+            "random_state",
+        ],
+    )
+    out_dir = Path(qc_cfg["out_dir"])
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    adata = ad.read_h5ad(args.adata_path)
+    adata = ad.read_h5ad(qc_cfg["adata_path"])
     obs_df = adata.obs.copy()
     available_qc_cols = validate_obs_columns(
         obs=obs_df,
-        qc_metadata_cols=args.qc_metadata_cols,
-        patient_col=args.patient_col,
-        batch_col=args.batch_col,
-        lane_col=args.lane_col,
+        qc_metadata_cols=qc_cfg["qc_metadata_cols"],
+        patient_col=qc_cfg["patient_col"],
+        batch_col=qc_cfg["batch_col"],
+        lane_col=qc_cfg["lane_col"],
     )
 
     counts_df = to_counts_dataframe(adata_obj=adata)
@@ -581,34 +537,39 @@ def main() -> None:
     gene_metrics = compute_gene_metrics(counts_df=counts_df)
     low_library_threshold = robust_low_library_threshold(
         library_sizes=sample_metrics["library_size"],
-        min_library_size=args.min_library_size,
-        mad_multiplier=args.mad_multiplier,
+        min_library_size=qc_cfg["min_library_size"],
+        mad_multiplier=qc_cfg["mad_multiplier"],
     )
     sample_metrics["low_library_flag"] = sample_metrics["library_size"] < low_library_threshold
 
     filtered_counts_df, keep_gene_mask = filter_low_expression_genes(
         counts_df=counts_df,
-        min_samples_expressed=args.min_samples_expressed,
+        min_samples_expressed=qc_cfg["min_samples_expressed"],
     )
     gene_metrics["pass_expression_filter"] = keep_gene_mask.values
 
     obs_for_counts = obs_df.loc[filtered_counts_df.index].copy()
     design_col = select_design_column(
         obs_df=obs_for_counts,
-        candidate_cols=available_qc_cols + [col for col in [args.patient_col, args.batch_col, args.lane_col] if col is not None],
+        candidate_cols=available_qc_cols
+        + [
+            col
+            for col in [qc_cfg["patient_col"], qc_cfg["batch_col"], qc_cfg["lane_col"]]
+            if col is not None
+        ],
     )
 
     transformed_df = normalize_and_log_transform(
         counts_df=filtered_counts_df,
         obs_df=obs_for_counts,
         design_col=design_col,
-        n_cpus=args.n_cpus,
+        n_cpus=qc_cfg["n_cpus"],
     )
 
     pca_df, explained_variance = run_pca(
         transformed_df=transformed_df,
-        n_pcs=max(2, args.n_pcs),
-        random_state=args.random_state,
+        n_pcs=max(2, qc_cfg["n_pcs"]),
+        random_state=qc_cfg["random_state"],
     )
     corr_df = transformed_df.T.corr(method="pearson")
 
@@ -622,13 +583,13 @@ def main() -> None:
     clustermap_colors = build_clustermap_colors(
         obs_df=obs_df,
         qc_metadata_cols=available_qc_cols,
-        patient_col=args.patient_col,
-        batch_col=args.batch_col,
-        lane_col=args.lane_col,
+        patient_col=qc_cfg["patient_col"],
+        batch_col=qc_cfg["batch_col"],
+        lane_col=qc_cfg["lane_col"],
     )
 
-    sample_metrics.to_csv(args.out_dir / "qc_metrics_samples.csv")
-    gene_metrics.to_csv(args.out_dir / "qc_metrics_genes.csv")
+    sample_metrics.to_csv(out_dir / "qc_metrics_samples.csv")
+    gene_metrics.to_csv(out_dir / "qc_metrics_genes.csv")
 
     filtering_summary = pd.DataFrame(
         [
@@ -637,28 +598,28 @@ def main() -> None:
                 "n_genes_before_filter": counts_df.shape[1],
                 "n_genes_after_filter": filtered_counts_df.shape[1],
                 "n_genes_removed": counts_df.shape[1] - filtered_counts_df.shape[1],
-                "min_samples_expressed": args.min_samples_expressed,
+                "min_samples_expressed": qc_cfg["min_samples_expressed"],
                 "low_library_threshold": low_library_threshold,
                 "n_low_library_samples": int(sample_metrics["low_library_flag"].sum()),
             }
         ]
     )
-    filtering_summary.to_csv(args.out_dir / "qc_filtering_summary.csv", index=False)
+    filtering_summary.to_csv(out_dir / "qc_filtering_summary.csv", index=False)
 
-    pca_with_meta.to_csv(args.out_dir / "pca_coordinates.csv")
+    pca_with_meta.to_csv(out_dir / "pca_coordinates.csv")
     pd.DataFrame(
         {
             "PC": [f"PC{i + 1}" for i in range(len(explained_variance))],
             "explained_variance_ratio": explained_variance,
         }
-    ).to_csv(args.out_dir / "pca_explained_variance.csv", index=False)
+    ).to_csv(out_dir / "pca_explained_variance.csv", index=False)
     if available_qc_cols:
         for metadata_col in available_qc_cols:
             save_pca_plot(
                 pca_with_meta=pca_with_meta,
                 metadata_col=metadata_col,
                 explained_variance=explained_variance,
-                out_path=args.out_dir / f"pca_{sanitize_filename_fragment(metadata_col)}.png",
+                out_path=out_dir / f"pca_{sanitize_filename_fragment(metadata_col)}.png",
             )
     else:
         print(
@@ -666,20 +627,20 @@ def main() -> None:
             "Skipping metadata-colored PCA plots."
         )
 
-    corr_df.to_csv(args.out_dir / "sample_correlation_matrix.csv")
+    corr_df.to_csv(out_dir / "sample_correlation_matrix.csv")
     save_correlation_clustermap(
         corr_df=corr_df,
         colors_df=clustermap_colors,
-        out_path=args.out_dir / "sample_correlation_clustermap.png",
+        out_path=out_dir / "sample_correlation_clustermap.png",
     )
     save_library_size_plot(
         sample_metrics=sample_metrics,
         low_library_threshold=low_library_threshold,
-        out_path=args.out_dir / "library_size_per_sample.png",
+        out_path=out_dir / "library_size_per_sample.png",
     )
 
     write_qc_summary(
-        out_path=args.out_dir / "qc_summary.txt",
+        out_path=out_dir / "qc_summary.txt",
         n_samples=counts_df.shape[0],
         n_genes_before=counts_df.shape[1],
         n_genes_after=filtered_counts_df.shape[1],
@@ -689,7 +650,7 @@ def main() -> None:
         corr_outliers=sample_metrics.index[sample_metrics["correlation_outlier_flag"]].tolist(),
     )
 
-    print(f"QC completed. Outputs written to: {args.out_dir}")
+    print(f"QC completed. Outputs written to: {out_dir}")
 
 
 if __name__ == "__main__":

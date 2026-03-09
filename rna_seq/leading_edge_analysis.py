@@ -26,35 +26,84 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from config_loader import get_config_section, load_config, render_template
+
+
+def resolve_gmt_dataset_name(gmt_path: Path, configured_name: str | None) -> str:
+    """Resolve dataset name token used in enrichment output templates.
+
+    Args:
+        gmt_path (Path): Filesystem path to the selected GMT file.
+        configured_name (str | None): Optional explicit dataset name from config.
+
+    Returns:
+        str: Dataset name token for template substitution.
+    """
+    if configured_name:
+        return configured_name
+    return gmt_path.stem.replace(".", "_")
+
+
 # %% [markdown]
 # ## Config
 
 # %%
-# condition
-CONDITION = 'IDH2'
+CONFIG = load_config()
+GLOBAL_CFG = get_config_section(config=CONFIG, section="global", required_keys=["condition"])
+GSEA_CFG = get_config_section(
+    config=CONFIG,
+    section="gene_enrichment",
+    required_keys=["gmt_path"],
+)
+LE_CFG = get_config_section(
+    config=CONFIG,
+    section="leading_edge_analysis",
+    required_keys=[
+        "gsea_results_csv_template",
+        "de_results_csv_template",
+        "output_dir_template",
+        "columns",
+        "analysis",
+        "outputs",
+        "plots",
+    ],
+)
+CONDITION = GLOBAL_CFG["condition"]
+GMT_DATASET_NAME = resolve_gmt_dataset_name(
+    gmt_path=Path(GSEA_CFG["gmt_path"]),
+    configured_name=GSEA_CFG.get("gmt_dataset_name"),
+)
+template_values = {
+    "condition": CONDITION,
+    "gmt_dataset_name": GMT_DATASET_NAME,
+}
 
 GSEA_RESULTS_CSV = Path(
-    f"/workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gsea_hallmark_prerank_{CONDITION}/gsea_hallmark_prerank_results_{CONDITION}.csv"
+    render_template(LE_CFG["gsea_results_csv_template"], template_values)
 )
 
 OUT_DIR = Path(
-    f"/workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gsea_hallmark_prerank_{CONDITION}/leading_edge_analysis"
+    render_template(LE_CFG["output_dir_template"], template_values)
 )
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 DE_RESULTS_CSV = Path(
-    f"/workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression/differential_expression_results_{CONDITION}.csv"
+    render_template(LE_CFG["de_results_csv_template"], template_values)
 )
 
-TERM_COL = "Term"
-LEAD_GENES_COL = "Lead_genes"
-FDR_COL = "FDR q-val"
-DE_GENE_COL = "gene_name"
-DE_LOG2FC_COL = "log2FoldChange"
+COLUMNS_CFG = LE_CFG["columns"]
+ANALYSIS_CFG = LE_CFG["analysis"]
+OUTPUTS_CFG = LE_CFG["outputs"]
+PLOTS_CFG = LE_CFG["plots"]
 
-TOP_TERMS = 50
-TOP_GENES = 100
-FDR_CUTOFF = 0.05
+TERM_COL = COLUMNS_CFG["term"]
+LEAD_GENES_COL = COLUMNS_CFG["lead_genes"]
+FDR_COL = COLUMNS_CFG["fdr"]
+DE_GENE_COL = COLUMNS_CFG["de_gene"]
+DE_LOG2FC_COL = COLUMNS_CFG["de_log2fc"]
+TOP_TERMS = ANALYSIS_CFG["top_terms"]
+TOP_GENES = ANALYSIS_CFG["top_genes"]
+FDR_CUTOFF = ANALYSIS_CFG["fdr_cutoff"]
 
 # %% [markdown]
 # ## Load results
@@ -78,7 +127,9 @@ lead_genes_series = (
     filtered_df[[TERM_COL, LEAD_GENES_COL]]
     .dropna(subset=[LEAD_GENES_COL])
     .assign(
-        lead_genes=lambda df: df[LEAD_GENES_COL].astype(str).str.split(";")
+        lead_genes=lambda df: df[LEAD_GENES_COL]
+        .astype(str)
+        .str.split(ANALYSIS_CFG["lead_gene_delimiter"])
     )
 )
 
@@ -110,9 +161,9 @@ term_counts = (
     lead_genes_long[TERM_COL].value_counts().rename_axis(TERM_COL).reset_index(name="lead_gene_count")
 )
 
-gene_counts.to_csv(OUT_DIR / "leading_edge_gene_counts.csv", index=False)
-term_counts.to_csv(OUT_DIR / "leading_edge_term_counts.csv", index=False)
-lead_genes_long.to_csv(OUT_DIR / "leading_edge_long_table.csv", index=False)
+gene_counts.to_csv(OUT_DIR / OUTPUTS_CFG["gene_counts_csv"], index=False)
+term_counts.to_csv(OUT_DIR / OUTPUTS_CFG["term_counts_csv"], index=False)
+lead_genes_long.to_csv(OUT_DIR / OUTPUTS_CFG["long_table_csv"], index=False)
 
 # %% [markdown]
 # ## Visualize: Top genes by leading-edge frequency
@@ -120,14 +171,16 @@ lead_genes_long.to_csv(OUT_DIR / "leading_edge_long_table.csv", index=False)
 # %%
 top_genes_df = gene_counts.head(TOP_GENES)
 
-plt.figure(figsize=(14, 18))
+plt.figure(figsize=tuple(PLOTS_CFG["top_genes"]["figsize"]))
 plt.barh(top_genes_df["lead_gene"][::-1], top_genes_df["count"][::-1])
-plt.xlabel("Leading-edge frequency")
-plt.ylabel("Gene")
-plt.title("Top leading-edge genes across Hallmark terms")
-plt.gcf().subplots_adjust(left=0.45)
+plt.xlabel(PLOTS_CFG["top_genes"]["xlabel"])
+plt.ylabel(PLOTS_CFG["top_genes"]["ylabel"])
+plt.title(PLOTS_CFG["top_genes"]["title"])
+plt.gcf().subplots_adjust(left=PLOTS_CFG["top_genes"]["left_adjust"])
 plt.tight_layout()
-plt.savefig(OUT_DIR / "leading_edge_top_genes.png", dpi=150)
+plt.savefig(
+    OUT_DIR / OUTPUTS_CFG["top_genes_png"], dpi=PLOTS_CFG["top_genes"]["dpi"]
+)
 plt.show()
 
 # %% [markdown]
@@ -136,14 +189,16 @@ plt.show()
 # %%
 top_terms_df = term_counts.head(TOP_TERMS)
 
-plt.figure(figsize=(14, 18))
+plt.figure(figsize=tuple(PLOTS_CFG["top_terms"]["figsize"]))
 plt.barh(top_terms_df[TERM_COL][::-1], top_terms_df["lead_gene_count"][::-1])
-plt.xlabel("Leading-edge gene count")
-plt.ylabel("Term")
-plt.title("Top Hallmark terms by leading-edge gene count")
-plt.gcf().subplots_adjust(left=0.55)
+plt.xlabel(PLOTS_CFG["top_terms"]["xlabel"])
+plt.ylabel(PLOTS_CFG["top_terms"]["ylabel"])
+plt.title(PLOTS_CFG["top_terms"]["title"])
+plt.gcf().subplots_adjust(left=PLOTS_CFG["top_terms"]["left_adjust"])
 plt.tight_layout()
-plt.savefig(OUT_DIR / "leading_edge_top_terms.png", dpi=150)
+plt.savefig(
+    OUT_DIR / OUTPUTS_CFG["top_terms_png"], dpi=PLOTS_CFG["top_terms"]["dpi"]
+)
 plt.show()
 
 # %% [markdown]
@@ -165,24 +220,26 @@ max_val = max(abs(heatmap_subset.min().min()), abs(heatmap_subset.max().max()))
 sns.set_theme(style="white")
 cluster_grid = sns.clustermap(
     heatmap_subset,
-    cmap="vlag",
-    center=0,
+    cmap=PLOTS_CFG["clustermap"]["cmap"],
+    center=PLOTS_CFG["clustermap"]["center"],
     vmin=-max_val,
     vmax=max_val,
-    figsize=(25, 10),
-    dendrogram_ratio=(0.04, 0.1),
-    linewidths=0.2,
-    linecolor="lightgrey",
+    figsize=tuple(PLOTS_CFG["clustermap"]["figsize"]),
+    dendrogram_ratio=tuple(PLOTS_CFG["clustermap"]["dendrogram_ratio"]),
+    linewidths=PLOTS_CFG["clustermap"]["linewidths"],
+    linecolor=PLOTS_CFG["clustermap"]["linecolor"],
 )
 cluster_grid.cax.remove()
-cbar_ax = cluster_grid.figure.add_axes([-0.01, 0.2, 0.008, 0.6])
+cbar_ax = cluster_grid.figure.add_axes(PLOTS_CFG["clustermap"]["cbar_axes"])
 cluster_grid.figure.colorbar(
     cluster_grid.ax_heatmap.collections[0],
     cax=cbar_ax,
-    label="Log2 Fold Change",
+    label=PLOTS_CFG["clustermap"]["cbar_label"],
 )
 cbar_ax.yaxis.set_label_position("left")
 cbar_ax.yaxis.tick_left()
-cluster_grid.figure.suptitle("Leading-edge Functional Landscape (Color = Log2FC)")
+cluster_grid.figure.suptitle(PLOTS_CFG["clustermap"]["title"])
 cluster_grid.figure.subplots_adjust(top=0.95)
-cluster_grid.savefig(OUT_DIR / "leading_edge_clustermap.png", dpi=500)
+cluster_grid.savefig(
+    OUT_DIR / OUTPUTS_CFG["clustermap_png"], dpi=PLOTS_CFG["clustermap"]["dpi"]
+)

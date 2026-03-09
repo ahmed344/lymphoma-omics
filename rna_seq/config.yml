@@ -1,0 +1,145 @@
+global:
+  condition: TET2
+  n_cpus: 8
+  random_state: 42
+
+differential_expression:
+  adata_path: /workspaces/lymphoma-omics/data/Diana/rna_seq/adata.h5ad
+  results_dir: /workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression
+  deseq:
+    refit_cooks: true
+  contrast:
+    test_suffix: mut
+    reference_suffix: wt
+  significance:
+    padj_max: 0.05
+    abs_log2fc_min: 1.0
+  volcano:
+    figsize: [10, 8]
+    point_size: 10
+    alpha: 0.7
+    threshold_lines:
+      padj: 0.05
+      log2fc_positive: 1.0
+      log2fc_negative: -1.0
+      center_x: 0.0
+    colors:
+      upregulated: "#d62728"
+      downregulated: "#1f77b4"
+      not_significant: lightgrey
+    top_gene_labels:
+      n_up: 20
+      n_down: 20
+      fontsize: 4
+      x_offset: 0.05
+      y_offset: -0.02
+    labels:
+      title_fontsize: 20
+      axis_label_fontsize: 16
+      tick_fontsize: 14
+      legend_fontsize: 14
+    save_dpi: 500
+
+gene_enrichment:
+  results_csv_template: /workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression/differential_expression_results_{condition}.csv
+  significant_csv_template: /workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression/differential_expression_significant_genes_{condition}.csv
+  gmt_path: /workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gene_sets/c1.all.v2026.1.Hs.symbols.gmt
+  gmt_dataset_name: c1_all_v2026_1_Hs_symbol
+  output_dir_template: /workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gsea_prerank_{gmt_dataset_name}_{condition}
+  required_columns:
+    - gene_name
+    - stat
+  rank:
+    deduplicate_by: gene_name
+    score_column: stat
+    sort_ascending: false
+  prerank:
+    seed: 42
+    min_size: 15
+    max_size: 500
+    permutation_num: 10000
+    verbose: true
+  outputs:
+    results_csv: gsea_prerank_results.csv
+    ranked_list_csv: gsea_prerank_ranked_list.csv
+    barplot_png: gsea_prerank_barplot.png
+    dotplot_png: gsea_prerank_dotplot.png
+  plots:
+    column: FDR q-val
+    title: GSEA prerank (top terms)
+    cutoff: 0.05
+    top_term: 50
+    figsize: [8, 15]
+  ora:
+    enabled: false
+    cutoff: 0.05
+    outdir_name: ora_significant_genes
+    results_csv: ora_significant_genes_results.csv
+
+leading_edge_analysis:
+  gsea_results_csv_template: /workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gsea_prerank_{gmt_dataset_name}_{condition}/gsea_prerank_results.csv
+  de_results_csv_template: /workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression/differential_expression_results_{condition}.csv
+  output_dir_template: /workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gsea_prerank_{gmt_dataset_name}_{condition}/leading_edge_analysis
+  columns:
+    term: Term
+    lead_genes: Lead_genes
+    fdr: FDR q-val
+    de_gene: gene_name
+    de_log2fc: log2FoldChange
+  analysis:
+    top_terms: 50
+    top_genes: 100
+    fdr_cutoff: 0.05
+    lead_gene_delimiter: ";"
+  outputs:
+    gene_counts_csv: leading_edge_gene_counts.csv
+    term_counts_csv: leading_edge_term_counts.csv
+    long_table_csv: leading_edge_long_table.csv
+    top_genes_png: leading_edge_top_genes.png
+    top_terms_png: leading_edge_top_terms.png
+    clustermap_png: leading_edge_clustermap.png
+  plots:
+    top_genes:
+      figsize: [14, 18]
+      left_adjust: 0.45
+      dpi: 150
+      title: Top leading-edge genes across Hallmark terms
+      xlabel: Leading-edge frequency
+      ylabel: Gene
+    top_terms:
+      figsize: [14, 18]
+      left_adjust: 0.55
+      dpi: 150
+      title: Top Hallmark terms by leading-edge gene count
+      xlabel: Leading-edge gene count
+      ylabel: Term
+    clustermap:
+      cmap: vlag
+      center: 0
+      figsize: [25, 10]
+      dendrogram_ratio: [0.04, 0.1]
+      linewidths: 0.2
+      linecolor: lightgrey
+      cbar_axes: [-0.01, 0.2, 0.008, 0.6]
+      cbar_label: Log2 Fold Change
+      title: Leading-edge Functional Landscape (Color = Log2FC)
+      dpi: 500
+
+qc_pre_de:
+  adata_path: /workspaces/lymphoma-omics/data/Diana/rna_seq/adata.h5ad
+  out_dir: /workspaces/lymphoma-omics/data/Diana/rna_seq/qc_pre_de
+  qc_metadata_cols:
+    - Source
+    - Mutations
+    - TET2
+    - IDH2
+    - IDHR172K
+  patient_col: Patient_ID
+  batch_col: null
+  lane_col: null
+  min_samples_expressed: 2
+  min_library_size: 100000.0
+  mad_multiplier: 3.0
+  n_pcs: 2
+  n_cpus: 8
+  random_state: 42

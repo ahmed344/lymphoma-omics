@@ -26,29 +26,63 @@ import pandas as pd  # Tabular data handling.
 import gseapy as gp  # GSEApy library for enrichment analysis.
 from gseapy.plot import barplot, dotplot  # Plot helpers for GSEA results.
 
+from config_loader import get_config_section, load_config, render_template
+
+
+def resolve_gmt_dataset_name(gmt_path: Path, configured_name: str | None) -> str:
+    """Resolve dataset name token used in output directory templates.
+
+    Args:
+        gmt_path (Path): Filesystem path to the selected GMT file.
+        configured_name (str | None): Optional explicit dataset name from config.
+
+    Returns:
+        str: Dataset name token for template substitution.
+    """
+    if configured_name:
+        return configured_name
+    return gmt_path.stem.replace(".", "_")
+
 
 # %% [markdown]
 # ## Config  # Configuration section.
 
 # %%
-# condition
-CONDITION = 'IDH2'  # condition
-RESULTS_CSV = Path(  # Input DE results CSV path.
-    f"/workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression/differential_expression_results_{CONDITION}.csv"  # CSV path.
-)  # Input DE results CSV path.
-SIGNIFICANT_CSV = Path(  # Input significant genes CSV path.
-    f"/workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression/differential_expression_significant_genes_{CONDITION}.csv"  # CSV path.
-)  # Input significant genes CSV path.
-GMT_PATH = Path(  # Hallmark GMT path.
-    "/workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gene_sets/h.all.v2026.1.Hs.symbols.gmt"  # GMT path.
-)  # Hallmark GMT path.
+CONFIG = load_config()
+GLOBAL_CFG = get_config_section(config=CONFIG, section="global", required_keys=["condition"])
+GSEA_CFG = get_config_section(
+    config=CONFIG,
+    section="gene_enrichment",
+    required_keys=[
+        "results_csv_template",
+        "significant_csv_template",
+        "gmt_path",
+        "output_dir_template",
+        "required_columns",
+        "rank",
+        "prerank",
+        "outputs",
+        "plots",
+        "ora",
+    ],
+)
 
-OUT_DIR = Path(  # Output directory for GSEA results and plots.
-    f"/workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gsea_hallmark_prerank_{CONDITION}"  # Output path.
-)  # Output directory for GSEA results and plots.
+CONDITION = GLOBAL_CFG["condition"]
+GMT_PATH = Path(GSEA_CFG["gmt_path"])
+GMT_DATASET_NAME = resolve_gmt_dataset_name(
+    gmt_path=GMT_PATH,
+    configured_name=GSEA_CFG.get("gmt_dataset_name"),
+)
+template_values = {
+    "condition": CONDITION,
+    "gmt_dataset_name": GMT_DATASET_NAME,
+}
+RESULTS_CSV = Path(render_template(GSEA_CFG["results_csv_template"], template_values))
+SIGNIFICANT_CSV = Path(render_template(GSEA_CFG["significant_csv_template"], template_values))
+OUT_DIR = Path(render_template(GSEA_CFG["output_dir_template"], template_values))
 OUT_DIR.mkdir(parents=True, exist_ok=True)  # Ensure output directory exists.
 
-RUN_ORA = False  # Toggle optional ORA on significant genes.
+RUN_ORA = GSEA_CFG["ora"]["enabled"]
 
 # %% [markdown]
 # ## Load results  # Load DE results.
@@ -57,7 +91,7 @@ RUN_ORA = False  # Toggle optional ORA on significant genes.
 results_df = pd.read_csv(RESULTS_CSV)  # Read full differential expression results.
 
 results_df = results_df.dropna(  # Remove rows with missing values.
-    subset=["gene_name", "stat"]  # Required columns for ranking.
+    subset=GSEA_CFG["required_columns"]  # Required columns for ranking.
 ).copy()  # Copy to avoid chained assignment warnings.
 results_df["gene_name"] = results_df["gene_name"].astype(str)  # Ensure gene symbols are strings.
 
@@ -67,10 +101,11 @@ results_df["gene_name"] = results_df["gene_name"].astype(str)  # Ensure gene sym
 # %%
 ranked_list = results_df[["gene_name", "stat"]].copy()  # Select required columns.
 ranked_list = ranked_list.groupby(  # Deduplicate gene symbols.
-    "gene_name", as_index=False  # Group by gene symbol.
-)["stat"].max()  # Keep max ranking metric per gene.
+    GSEA_CFG["rank"]["deduplicate_by"], as_index=False  # Group by gene symbol.
+)[GSEA_CFG["rank"]["score_column"]].max()  # Keep max ranking metric per gene.
 ranked_list = ranked_list.sort_values(  # Sort genes by ranking metric.
-    "stat", ascending=False  # Highest scores first.
+    GSEA_CFG["rank"]["score_column"],
+    ascending=GSEA_CFG["rank"]["sort_ascending"],
 )  # End sort call.
 ranked_list.head()  # Preview top ranked genes.
 
@@ -82,11 +117,11 @@ pre_res = gp.prerank(  # Run GSEA prerank analysis.
     rnk=ranked_list,  # Ranked list of all detected genes.
     gene_sets=str(GMT_PATH),  # Hallmark gene set GMT path.
     outdir=str(OUT_DIR),  # Output directory for GSEApy artifacts.
-    seed=42,  # Seed for reproducibility.
-    min_size=15,  # Minimum gene set size.
-    max_size=500,  # Maximum gene set size.
-    verbose=True,  # Verbose logging during run.
-    permutation_num=10**4,  # Number of permutations for enrichment analysis.
+    seed=GSEA_CFG["prerank"]["seed"],  # Seed for reproducibility.
+    min_size=GSEA_CFG["prerank"]["min_size"],  # Minimum gene set size.
+    max_size=GSEA_CFG["prerank"]["max_size"],  # Maximum gene set size.
+    verbose=GSEA_CFG["prerank"]["verbose"],  # Verbose logging during run.
+    permutation_num=GSEA_CFG["prerank"]["permutation_num"],  # Number of permutations for enrichment analysis.
 )  # End prerank call.
 
 # %% [markdown]
@@ -94,10 +129,10 @@ pre_res = gp.prerank(  # Run GSEA prerank analysis.
 
 # %%
 pre_res.res2d.to_csv(  # Save GSEA results table.
-    OUT_DIR / "gsea_hallmark_prerank_results.csv"  # Results CSV output path.
+    OUT_DIR / GSEA_CFG["outputs"]["results_csv"]  # Results CSV output path.
 )  # Save GSEA results table.
 ranked_list.to_csv(  # Save the ranked list used for GSEA.
-    OUT_DIR / "gsea_hallmark_prerank_ranked_list.csv",  # Ranked list CSV output path.
+    OUT_DIR / GSEA_CFG["outputs"]["ranked_list_csv"],  # Ranked list CSV output path.
     index=False,  # Skip index column.
 )  # Save the ranked list used for GSEA.
 
@@ -107,22 +142,22 @@ ranked_list.to_csv(  # Save the ranked list used for GSEA.
 # %%
 barplot(  # Render bar plot of top enriched terms.
     pre_res.res2d,  # GSEA results DataFrame.
-    column="FDR q-val",  # Column used for cutoff/ordering.
-    title="Hallmark GSEA prerank (top terms)",  # Plot title.
-    cutoff=0.05,  # FDR threshold.
-    top_term=50,  # Number of top terms to show.
-    figsize=(8, 10),  # Figure size.
-    ofname=str(OUT_DIR / "gsea_hallmark_prerank_barplot.png"),  # Output PNG path.
+    column=GSEA_CFG["plots"]["column"],  # Column used for cutoff/ordering.
+    title=GSEA_CFG["plots"]["title"],  # Plot title.
+    cutoff=GSEA_CFG["plots"]["cutoff"],  # FDR threshold.
+    top_term=GSEA_CFG["plots"]["top_term"],  # Number of top terms to show.
+    figsize=tuple(GSEA_CFG["plots"]["figsize"]),  # Figure size.
+    ofname=str(OUT_DIR / GSEA_CFG["outputs"]["barplot_png"]),  # Output PNG path.
 )  # End barplot call.
 
 dotplot(  # Render dot plot of top enriched terms.
     pre_res.res2d,  # GSEA results DataFrame.
-    column="FDR q-val",  # Column used for cutoff/ordering.
-    title="Hallmark GSEA prerank (top terms)",  # Plot title.
-    cutoff=0.05,  # FDR threshold.
-    top_term=50,  # Number of top terms to show.
-    figsize=(8, 10),  # Figure size.
-    ofname=str(OUT_DIR / "gsea_hallmark_prerank_dotplot.png"),  # Output PNG path.
+    column=GSEA_CFG["plots"]["column"],  # Column used for cutoff/ordering.
+    title=GSEA_CFG["plots"]["title"],  # Plot title.
+    cutoff=GSEA_CFG["plots"]["cutoff"],  # FDR threshold.
+    top_term=GSEA_CFG["plots"]["top_term"],  # Number of top terms to show.
+    figsize=tuple(GSEA_CFG["plots"]["figsize"]),  # Figure size.
+    ofname=str(OUT_DIR / GSEA_CFG["outputs"]["dotplot_png"]),  # Output PNG path.
 )  # End dotplot call.
 
 # %% [markdown]
@@ -138,11 +173,11 @@ if RUN_ORA:  # Run only when explicitly enabled.
     ora_res = gp.enrichr(  # Run ORA with Enrichr via gseapy.
         gene_list=gene_list,  # List of significant genes.
         gene_sets=str(GMT_PATH),  # Hallmark gene set GMT path.
-        outdir=str(OUT_DIR / "ora_significant_genes"),  # ORA output directory.
-        cutoff=0.05,  # FDR cutoff for ORA results.
+        outdir=str(OUT_DIR / GSEA_CFG["ora"]["outdir_name"]),  # ORA output directory.
+        cutoff=GSEA_CFG["ora"]["cutoff"],  # FDR cutoff for ORA results.
     )  # End ORA call.
     ora_res.results.to_csv(  # Save ORA results.
-        OUT_DIR / "ora_significant_genes_results.csv",  # ORA results CSV path.
+        OUT_DIR / GSEA_CFG["ora"]["results_csv"],  # ORA results CSV path.
         index=False,  # Skip index column.
     )  # End ORA results save.
 
