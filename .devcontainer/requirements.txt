@@ -4,6 +4,7 @@ pandas
 openpyxl
 seaborn
 scikit-learn
+fastcluster
 jupyter
 ipywidgets
 jupytext

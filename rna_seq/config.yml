@@ -1,6 +1,6 @@
 global:
-  condition: TET2
-  n_cpus: 8
+  condition: IDH2
+  n_cpus: 32
   random_state: 42
 
 differential_expression:
@@ -43,8 +43,8 @@ differential_expression:
 gene_enrichment:
   results_csv_template: /workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression/differential_expression_results_{condition}.csv
   significant_csv_template: /workspaces/lymphoma-omics/data/Diana/rna_seq/differential_expression/differential_expression_significant_genes_{condition}.csv
-  gmt_path: /workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gene_sets/c1.all.v2026.1.Hs.symbols.gmt
-  gmt_dataset_name: c1_all_v2026_1_Hs_symbol
+  gmt_path: /workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gene_sets/c4.cgn.v2026.1.Hs.symbols.gmt
+  gmt_dataset_name: c5_cgn_v2026_1_Hs_symbol
   output_dir_template: /workspaces/lymphoma-omics/data/Diana/rna_seq/gene_set_enrichment_analysis/gsea_prerank_{gmt_dataset_name}_{condition}
   required_columns:
     - gene_name
@@ -87,8 +87,8 @@ leading_edge_analysis:
     de_gene: gene_name
     de_log2fc: log2FoldChange
   analysis:
-    top_terms: 50
-    top_genes: 100
+    top_terms: 100
+    top_genes: 200
     fdr_cutoff: 0.05
     lead_gene_delimiter: ";"
   outputs:
@@ -116,13 +116,30 @@ leading_edge_analysis:
     clustermap:
       cmap: vlag
       center: 0
-      figsize: [25, 10]
-      dendrogram_ratio: [0.04, 0.1]
+      figsize_min: [25, 10]
+      figsize_max: [50, 60]
+      gene_count_range: [25, 200]
+      pathway_count_range: [25, 1200]
+      x_label_fontsize_min: 14
+      x_label_fontsize_max: 24
+      x_tick_fontsize_min: 8
+      x_tick_fontsize_max: 14
+      y_label_fontsize_min: 14
+      y_label_fontsize_max: 24
+      y_tick_fontsize_min: 8
+      y_tick_fontsize_max: 14
+      cbar_label_fontsize_min: 14
+      cbar_label_fontsize_max: 22
+      cbar_tick_fontsize_min: 15
+      cbar_tick_fontsize_max: 26
+      dendrogram_ratio_genes_min: 0.02
+      dendrogram_ratio_genes_max: 0.20
+      dendrogram_ratio_pathways_min: 0.02
+      dendrogram_ratio_pathways_max: 0.20
       linewidths: 0.2
       linecolor: lightgrey
       cbar_axes: [-0.01, 0.2, 0.008, 0.6]
       cbar_label: Log2 Fold Change
-      title: Leading-edge Functional Landscape (Color = Log2FC)
       dpi: 500
 
 qc_pre_de:

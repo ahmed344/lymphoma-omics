@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from config_loader import get_config_section, load_config, render_template
+from utils import compute_clustermap_layout, truncate_display_label
 
 
 def resolve_gmt_dataset_name(gmt_path: Path, configured_name: str | None) -> str:
@@ -213,33 +214,76 @@ heatmap_df = lead_genes_long.pivot_table(
 )
 
 top_heatmap_genes = gene_counts.head(TOP_GENES)["lead_gene"].tolist()
-heatmap_subset = heatmap_df.reindex(columns=top_heatmap_genes).fillna(0)
+heatmap_subset = heatmap_df.reindex(columns=top_heatmap_genes)
+heatmap_subset = heatmap_subset.loc[heatmap_subset.notna().any(axis=1)]
+heatmap_missing_mask = heatmap_subset.isna()
+heatmap_for_clustering = heatmap_subset.fillna(0)
+clustermap_layout = compute_clustermap_layout(
+    pathway_count=heatmap_for_clustering.shape[0],
+    gene_count=heatmap_for_clustering.shape[1],
+    clustermap_cfg=PLOTS_CFG["clustermap"],
+)
 
-max_val = max(abs(heatmap_subset.min().min()), abs(heatmap_subset.max().max()))
+max_val = max(
+    abs(heatmap_for_clustering.min().min()),
+    abs(heatmap_for_clustering.max().max()),
+)
+clustermap_cmap = sns.color_palette(PLOTS_CFG["clustermap"]["cmap"], as_cmap=True)
+clustermap_cmap.set_bad(color="white")
 
 sns.set_theme(style="white")
 cluster_grid = sns.clustermap(
-    heatmap_subset,
-    cmap=PLOTS_CFG["clustermap"]["cmap"],
+    heatmap_for_clustering,
+    cmap=clustermap_cmap,
+    mask=heatmap_missing_mask,
     center=PLOTS_CFG["clustermap"]["center"],
     vmin=-max_val,
     vmax=max_val,
-    figsize=tuple(PLOTS_CFG["clustermap"]["figsize"]),
-    dendrogram_ratio=tuple(PLOTS_CFG["clustermap"]["dendrogram_ratio"]),
+    figsize=clustermap_layout["figsize"],
+    dendrogram_ratio=clustermap_layout["dendrogram_ratio"],
     linewidths=PLOTS_CFG["clustermap"]["linewidths"],
     linecolor=PLOTS_CFG["clustermap"]["linecolor"],
 )
+cluster_grid.ax_heatmap.tick_params(
+    axis="x",
+    labelsize=clustermap_layout["x_tick_fontsize"],
+)
+cluster_grid.ax_heatmap.set_xlabel(
+    "Leading genes",
+    fontsize=clustermap_layout["x_label_fontsize"],
+)
+cluster_grid.ax_heatmap.tick_params(
+    axis="y",
+    labelsize=clustermap_layout["y_tick_fontsize"],
+    labelrotation=0,
+)
+cluster_grid.ax_heatmap.set_ylabel(
+    "Pathways",
+    fontsize=clustermap_layout["y_label_fontsize"],
+)
+truncated_pathway_labels = [
+    truncate_display_label(label=tick.get_text(), max_length=50)
+    for tick in cluster_grid.ax_heatmap.get_yticklabels()
+]
+cluster_grid.ax_heatmap.set_yticklabels(
+    truncated_pathway_labels,
+    fontsize=clustermap_layout["y_tick_fontsize"],
+    rotation=0,
+)
 cluster_grid.cax.remove()
 cbar_ax = cluster_grid.figure.add_axes(PLOTS_CFG["clustermap"]["cbar_axes"])
-cluster_grid.figure.colorbar(
+cbar = cluster_grid.figure.colorbar(
     cluster_grid.ax_heatmap.collections[0],
     cax=cbar_ax,
     label=PLOTS_CFG["clustermap"]["cbar_label"],
 )
+cbar.set_label(
+    PLOTS_CFG["clustermap"]["cbar_label"],
+    fontsize=clustermap_layout["cbar_label_fontsize"],
+)
+cbar.ax.tick_params(labelsize=clustermap_layout["cbar_tick_fontsize"])
 cbar_ax.yaxis.set_label_position("left")
 cbar_ax.yaxis.tick_left()
-cluster_grid.figure.suptitle(PLOTS_CFG["clustermap"]["title"])
-cluster_grid.figure.subplots_adjust(top=0.95)
 cluster_grid.savefig(
     OUT_DIR / OUTPUTS_CFG["clustermap_png"], dpi=PLOTS_CFG["clustermap"]["dpi"]
 )
